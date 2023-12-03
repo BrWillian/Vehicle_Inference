@@ -1,6 +1,10 @@
 from ultralytics import YOLO
+import ultralytics
 import os
+import numpy as np
 import cv2
+import json
+from typing import Dict
 
 
 class YOLOModelFactory:
@@ -24,9 +28,9 @@ class YOLOModelFactory:
 
 
 class VehicleInference:
-    def __init__(self, path_classes: str, conf: float = 0.75, iou: float = 0.75,
-                 half: bool = True, max_det: int = 2, imgsz: int = 320):
-        self.path_classes = path_classes
+    def __init__(self, classes: dict = dict(), conf: float = 0.75, iou: float = 0.75,
+                 half: bool = True, max_det: int = 2, imgsz: int = 640):
+        self.classes = classes
         self.conf = conf
         self.iou = iou
         self.half = half
@@ -35,37 +39,43 @@ class VehicleInference:
         self.model_factory = YOLOModelFactory()
         self.model = None
         self.images = []
+        self.images_name = []
 
     def _list_dir(self, directory: str) -> list:
         for root, dirs, files in os.walk(directory):
             for file in files:
                 abs_path = os.path.join(root, file)
                 im = cv2.imread(abs_path)
-                im_sized = cv2.resize(im, (self.imgsz, self.imgsz), interpolation=cv2.INTER_CUBIC)
-                self.images.append(im_sized)
+                self.images_name.append(abs_path.split(".")[0])
+                self.images.append(im)
         return self.images
 
     def initialize_model(self, path_model: str):
         self.model = self.model_factory.create_model(path_model)
+        self.classes = self.model.names
 
-    def inference(self, source: str = None):
+    @staticmethod
+    def get_max_confidence_from_json(json_result: str):
+        result_json = json.loads(json_result)
+        index = max(range(len(result_json)), key=lambda index: result_json[index]['confidence'])
+        return result_json[index]
+
+    def inference(self, source: str = None, output: str = None):
         if self.model is None:
             raise ValueError("Model not initialized. Call initialize_model first.")
 
         self._list_dir(source)
-        results = self.model(self.images)
 
-        for result in results:
-            boxes = result.boxes
-            probs = result.probs
+        for index, image in enumerate(self.images):
+            image_copy = image.copy()
+            results = self.model(image.copy(), half=True)
+            for result in results:
+                result_by_confidence = self.get_max_confidence_from_json(result.tojson())
+                vehicle_class = result_by_confidence["name"]
+                box = result_by_confidence["box"]
 
-            print(result)
-            print(boxes, probs)
-
-
-# Example usage:
-path_to_model = "path/to/your/model"
-path_to_classes = "path/to/your/classes"
-vehicle_inference = VehicleInference(path_classes=path_to_classes)
-vehicle_inference.initialize_model(path_model=path_to_model)
-vehicle_inference.inference(source="path/to/your/images")
+                if vehicle_class == "carro" or vehicle_class == "caminhonete":
+                    roi = image_copy[int(box['y1']):int(box['y2']), int(box['x1']):int(box['x2'])]
+                    cv2.imwrite(self.images_name[index]+"_roi.jpg", roi)
+                else:
+                    print(self.images_name[index])
